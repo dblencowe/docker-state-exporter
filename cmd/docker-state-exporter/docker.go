@@ -16,8 +16,8 @@ import (
 // deviation (§5) — every method is genuinely used, and *client.Client
 // satisfies this for free with no wrapping.
 type DockerClient interface {
-	ContainerList(ctx context.Context, opts container.ListOptions) ([]types.Container, error)
-	ContainerInspect(ctx context.Context, id string) (types.ContainerJSON, error)
+	ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error)
+	ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error)
 	Ping(ctx context.Context) (types.Ping, error)
 	Close() error
 }

@@ -1,3 +1,6 @@
+// Package main implements the docker-state-exporter binary: a Prometheus
+// exporter that scrapes container state, health, and lifecycle timestamps
+// from the local Docker daemon.
 package main
 
 import (
@@ -14,6 +17,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -93,7 +97,7 @@ func run(cfg cliFlags, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("creating docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -109,13 +113,13 @@ func run(cfg cliFlags, logger *slog.Logger) error {
 	})
 
 	registry := prometheus.NewRegistry()
-	registry.MustRegister(prometheus.NewBuildInfoCollector())
+	registry.MustRegister(collectors.NewBuildInfoCollector())
 	registry.MustRegister(collector)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", indexHandler(cfg.metricsPath))
 	mux.HandleFunc("/-/healthy", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, "up")
+		_, _ = fmt.Fprint(w, "up")
 	})
 	mux.HandleFunc(readinessPath, readinessHandler(cli))
 	mux.Handle(cfg.metricsPath, promhttp.HandlerFor(registry, promhttp.HandlerOpts{
@@ -195,7 +199,7 @@ func readinessHandler(cli DockerClient) http.HandlerFunc {
 			http.Error(w, "docker unreachable: "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		fmt.Fprint(w, "ready")
+		_, _ = fmt.Fprint(w, "ready")
 	}
 }
 

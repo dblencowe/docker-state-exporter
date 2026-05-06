@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -22,7 +22,7 @@ func sanitizeLabelKey(k string) string {
 // buildLabels produces the Prometheus label set for a single container.
 // hostLabel is emitted as the "host" label when non-empty; an empty string
 // omits it entirely (preserving series identity for users who don't opt in).
-func buildLabels(info types.ContainerJSON, hostLabel string) prometheus.Labels {
+func buildLabels(info container.InspectResponse, hostLabel string) prometheus.Labels {
 	labels := prometheus.Labels{}
 
 	if info.Config != nil {

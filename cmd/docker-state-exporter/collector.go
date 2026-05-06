@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -27,7 +26,7 @@ type dockerHealthCollector struct {
 	cacheTTL  time.Duration
 	now       func() time.Time
 
-	cache    []types.ContainerJSON
+	cache    []container.InspectResponse
 	lastSeen time.Time
 }
 
@@ -80,7 +79,7 @@ func (c *dockerHealthCollector) refresh(ctx context.Context) error {
 		return err
 	}
 
-	fresh := make([]types.ContainerJSON, 0, len(containers))
+	fresh := make([]container.InspectResponse, 0, len(containers))
 	for _, ct := range containers {
 		info, err := c.client.ContainerInspect(ctx, ct.ID)
 		if err != nil {
@@ -98,7 +97,7 @@ func (c *dockerHealthCollector) refresh(ctx context.Context) error {
 
 // normalize fills in nil sub-structs so downstream emit code can index without
 // guarding every field. Mutates a value receiver so callers see the result.
-func normalize(info types.ContainerJSON) types.ContainerJSON {
+func normalize(info container.InspectResponse) container.InspectResponse {
 	if info.Config == nil {
 		info.Config = &container.Config{Labels: map[string]string{}}
 	}
@@ -106,10 +105,10 @@ func normalize(info types.ContainerJSON) types.ContainerJSON {
 		info.Config.Labels = map[string]string{}
 	}
 	if info.ContainerJSONBase != nil && info.State == nil {
-		info.State = &types.ContainerState{}
+		info.State = &container.State{}
 	}
 	if info.State != nil && info.State.Health == nil {
-		info.State.Health = &types.Health{Status: "none"}
+		info.State.Health = &container.Health{Status: "none"}
 	}
 	return info
 }
@@ -137,7 +136,7 @@ func emitStateGauges(ch chan<- prometheus.Metric, desc descSource, allStates []s
 	}
 }
 
-func (c *dockerHealthCollector) parseTimestamp(info types.ContainerJSON, field, raw string) float64 {
+func (c *dockerHealthCollector) parseTimestamp(info container.InspectResponse, field, raw string) float64 {
 	if raw == "" {
 		return 0
 	}
@@ -161,49 +160,49 @@ func boolToFloat(b bool) float64 {
 	return 0
 }
 
-func healthStatus(info types.ContainerJSON) string {
+func healthStatus(info container.InspectResponse) string {
 	if info.State == nil || info.State.Health == nil {
 		return "none"
 	}
 	return info.State.Health.Status
 }
 
-func containerStatus(info types.ContainerJSON) string {
+func containerStatus(info container.InspectResponse) string {
 	if info.State == nil {
 		return ""
 	}
 	return info.State.Status
 }
 
-func oomKilled(info types.ContainerJSON) bool {
+func oomKilled(info container.InspectResponse) bool {
 	if info.State == nil {
 		return false
 	}
 	return info.State.OOMKilled
 }
 
-func startedAt(info types.ContainerJSON) string {
+func startedAt(info container.InspectResponse) string {
 	if info.State == nil {
 		return ""
 	}
 	return info.State.StartedAt
 }
 
-func finishedAt(info types.ContainerJSON) string {
+func finishedAt(info container.InspectResponse) string {
 	if info.State == nil {
 		return ""
 	}
 	return info.State.FinishedAt
 }
 
-func createdAt(info types.ContainerJSON) string {
+func createdAt(info container.InspectResponse) string {
 	if info.ContainerJSONBase == nil {
 		return ""
 	}
 	return info.Created
 }
 
-func restartCount(info types.ContainerJSON) int {
+func restartCount(info container.InspectResponse) int {
 	if info.ContainerJSONBase == nil {
 		return 0
 	}

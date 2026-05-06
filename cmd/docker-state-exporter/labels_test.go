@@ -3,7 +3,6 @@ package main
 import (
 	"testing"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 )
 
@@ -25,8 +24,8 @@ func TestSanitizeLabelKey(t *testing.T) {
 }
 
 func TestBuildLabels_DenylistFiltersComposeHash(t *testing.T) {
-	info := types.ContainerJSON{
-		ContainerJSONBase: &types.ContainerJSONBase{ID: "abc", Name: "/svc"},
+	info := container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{ID: "abc", Name: "/svc"},
 		Config: &container.Config{
 			Image:    "nginx:latest",
 			Hostname: "svc-host",
@@ -67,8 +66,8 @@ func TestBuildLabels_DenylistFiltersComposeHash(t *testing.T) {
 }
 
 func TestBuildLabels_NilConfig(t *testing.T) {
-	info := types.ContainerJSON{
-		ContainerJSONBase: &types.ContainerJSONBase{ID: "x", Name: "/y"},
+	info := container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{ID: "x", Name: "/y"},
 		Config:            nil,
 	}
 	got := buildLabels(info, "")
@@ -81,8 +80,8 @@ func TestBuildLabels_NilConfig(t *testing.T) {
 }
 
 func TestBuildLabels_HostLabelOptIn(t *testing.T) {
-	info := types.ContainerJSON{
-		ContainerJSONBase: &types.ContainerJSONBase{ID: "x", Name: "/y"},
+	info := container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{ID: "x", Name: "/y"},
 		Config:            &container.Config{Hostname: "h"},
 	}
 	got := buildLabels(info, "node-1")

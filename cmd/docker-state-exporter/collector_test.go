@@ -19,28 +19,28 @@ import (
 
 // fakeDocker implements DockerClient for tests.
 type fakeDocker struct {
-	listResp     []types.Container
+	listResp     []container.Summary
 	listErr      error
 	listCalls    int
-	inspectByID  map[string]types.ContainerJSON
+	inspectByID  map[string]container.InspectResponse
 	inspectErr   map[string]error
 	inspectCalls int
 	pingErr      error
 }
 
-func (f *fakeDocker) ContainerList(_ context.Context, _ container.ListOptions) ([]types.Container, error) {
+func (f *fakeDocker) ContainerList(_ context.Context, _ container.ListOptions) ([]container.Summary, error) {
 	f.listCalls++
 	return f.listResp, f.listErr
 }
 
-func (f *fakeDocker) ContainerInspect(_ context.Context, id string) (types.ContainerJSON, error) {
+func (f *fakeDocker) ContainerInspect(_ context.Context, id string) (container.InspectResponse, error) {
 	f.inspectCalls++
 	if err, ok := f.inspectErr[id]; ok {
-		return types.ContainerJSON{}, err
+		return container.InspectResponse{}, err
 	}
 	info, ok := f.inspectByID[id]
 	if !ok {
-		return types.ContainerJSON{}, errors.New("not found")
+		return container.InspectResponse{}, errors.New("not found")
 	}
 	return info, nil
 }
@@ -52,18 +52,18 @@ func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
-func makeContainer(id, name, image string, state container.ContainerState, health *types.Health, oom bool, restarts int) types.ContainerJSON {
+func makeContainer(id, name, image string, state container.ContainerState, health *container.Health, oom bool, restarts int) container.InspectResponse {
 	startedAt := "2024-01-01T10:00:00Z"
 	finishedAt := "0001-01-01T00:00:00Z"
 	created := "2024-01-01T09:00:00Z"
-	return types.ContainerJSON{
-		ContainerJSONBase: &types.ContainerJSONBase{
+	return container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
 			ID:           id,
 			Name:         "/" + name,
 			Image:        image,
 			Created:      created,
 			RestartCount: restarts,
-			State: &types.ContainerState{
+			State: &container.State{
 				Status:     string(state),
 				OOMKilled:  oom,
 				StartedAt:  startedAt,
@@ -81,11 +81,11 @@ func makeContainer(id, name, image string, state container.ContainerState, healt
 
 func TestCollect_HappyPath_SingleRunningHealthy(t *testing.T) {
 	info := makeContainer("c1", "web", "nginx:latest", "running",
-		&types.Health{Status: "healthy"}, false, 0)
+		&container.Health{Status: "healthy"}, false, 0)
 
 	docker := &fakeDocker{
-		listResp:    []types.Container{{ID: "c1"}},
-		inspectByID: map[string]types.ContainerJSON{"c1": info},
+		listResp:    []container.Summary{{ID: "c1"}},
+		inspectByID: map[string]container.InspectResponse{"c1": info},
 	}
 
 	c := newCollector(collectorOptions{
@@ -131,8 +131,8 @@ func TestCollect_NilHealth_EmitsNoneOnly(t *testing.T) {
 	info := makeContainer("c1", "web", "nginx", "running", nil, false, 0)
 
 	docker := &fakeDocker{
-		listResp:    []types.Container{{ID: "c1"}},
-		inspectByID: map[string]types.ContainerJSON{"c1": info},
+		listResp:    []container.Summary{{ID: "c1"}},
+		inspectByID: map[string]container.InspectResponse{"c1": info},
 	}
 	c := newCollector(collectorOptions{Client: docker, Logger: quietLogger(), CacheTTL: time.Second})
 
@@ -149,18 +149,18 @@ func TestCollect_NilHealth_EmitsNoneOnly(t *testing.T) {
 }
 
 func TestCollect_NilConfig_NoPanicAndEmitsBaseLabels(t *testing.T) {
-	info := types.ContainerJSON{
-		ContainerJSONBase: &types.ContainerJSONBase{
+	info := container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
 			ID:      "abc",
 			Name:    "/orphan",
-			State:   &types.ContainerState{Status: "exited", StartedAt: "0001-01-01T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z"},
+			State:   &container.State{Status: "exited", StartedAt: "0001-01-01T00:00:00Z", FinishedAt: "0001-01-01T00:00:00Z"},
 			Created: "0001-01-01T00:00:00Z",
 		},
 		Config: nil,
 	}
 	docker := &fakeDocker{
-		listResp:    []types.Container{{ID: "abc"}},
-		inspectByID: map[string]types.ContainerJSON{"abc": info},
+		listResp:    []container.Summary{{ID: "abc"}},
+		inspectByID: map[string]container.InspectResponse{"abc": info},
 	}
 	c := newCollector(collectorOptions{Client: docker, Logger: quietLogger(), CacheTTL: time.Second})
 
@@ -177,10 +177,10 @@ func TestCollect_NilConfig_NoPanicAndEmitsBaseLabels(t *testing.T) {
 }
 
 func TestCollect_CacheTTL_WithinWindowReusesSnapshot(t *testing.T) {
-	info := makeContainer("c1", "web", "nginx", "running", &types.Health{Status: "healthy"}, false, 0)
+	info := makeContainer("c1", "web", "nginx", "running", &container.Health{Status: "healthy"}, false, 0)
 	docker := &fakeDocker{
-		listResp:    []types.Container{{ID: "c1"}},
-		inspectByID: map[string]types.ContainerJSON{"c1": info},
+		listResp:    []container.Summary{{ID: "c1"}},
+		inspectByID: map[string]container.InspectResponse{"c1": info},
 	}
 
 	clock := &fakeClock{t: time.Unix(0, 0)}
@@ -205,10 +205,10 @@ func TestCollect_CacheTTL_WithinWindowReusesSnapshot(t *testing.T) {
 }
 
 func TestCollect_CacheTTL_ExpiryRefetches(t *testing.T) {
-	info := makeContainer("c1", "web", "nginx", "running", &types.Health{Status: "healthy"}, false, 0)
+	info := makeContainer("c1", "web", "nginx", "running", &container.Health{Status: "healthy"}, false, 0)
 	docker := &fakeDocker{
-		listResp:    []types.Container{{ID: "c1"}},
-		inspectByID: map[string]types.ContainerJSON{"c1": info},
+		listResp:    []container.Summary{{ID: "c1"}},
+		inspectByID: map[string]container.InspectResponse{"c1": info},
 	}
 
 	clock := &fakeClock{t: time.Unix(0, 0)}
@@ -233,13 +233,13 @@ func TestCollect_CacheTTL_ExpiryRefetches(t *testing.T) {
 }
 
 func TestCollect_MultipleContainersDifferentStates(t *testing.T) {
-	web := makeContainer("c1", "web", "nginx", "running", &types.Health{Status: "healthy"}, false, 0)
-	worker := makeContainer("c2", "worker", "app", "exited", &types.Health{Status: "unhealthy"}, true, 3)
+	web := makeContainer("c1", "web", "nginx", "running", &container.Health{Status: "healthy"}, false, 0)
+	worker := makeContainer("c2", "worker", "app", "exited", &container.Health{Status: "unhealthy"}, true, 3)
 	idle := makeContainer("c3", "idle", "redis", "paused", nil, false, 0)
 
 	docker := &fakeDocker{
-		listResp: []types.Container{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}},
-		inspectByID: map[string]types.ContainerJSON{
+		listResp: []container.Summary{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}},
+		inspectByID: map[string]container.InspectResponse{
 			"c1": web, "c2": worker, "c3": idle,
 		},
 	}
@@ -276,12 +276,12 @@ func TestCollect_EmptyList(t *testing.T) {
 }
 
 func TestCollect_InspectErrorSkipsContainer(t *testing.T) {
-	web := makeContainer("c1", "web", "nginx", "running", &types.Health{Status: "healthy"}, false, 0)
-	other := makeContainer("c3", "ok", "redis", "running", &types.Health{Status: "healthy"}, false, 0)
+	web := makeContainer("c1", "web", "nginx", "running", &container.Health{Status: "healthy"}, false, 0)
+	other := makeContainer("c3", "ok", "redis", "running", &container.Health{Status: "healthy"}, false, 0)
 
 	docker := &fakeDocker{
-		listResp: []types.Container{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}},
-		inspectByID: map[string]types.ContainerJSON{
+		listResp: []container.Summary{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}},
+		inspectByID: map[string]container.InspectResponse{
 			"c1": web,
 			"c3": other,
 		},
