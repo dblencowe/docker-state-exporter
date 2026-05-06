@@ -1,95 +1,110 @@
+# docker-state-exporter
 
-# Notice
+Prometheus exporter for Docker container state - health, status, restart count, lifecycle timestamps. Pairs with cAdvisor (which doesn't expose any of those).
 
-I don't maintain this repository very well, so please fork and use this.
+Fork of [karugaru/docker_state_exporter](https://github.com/karugaru/docker_state_exporter). Upstream is dead and the bundled Docker SDK is too old to talk to current daemons:
 
-# Docker State Exporter
+```
+client version 1.41 is too old. Minimum supported API version is 1.44
+```
 
-Exporter for docker container state
+This fork pins a current SDK and turns on API version negotiation, so it works against any reasonable daemon. Same metric names and labels as upstream, so existing dashboards keep working.
 
-Prometheus exporter for docker container state, written in Go.
-
-One of the best known exporters of docker container information is [cAdvisor](https://github.com/google/cadvisor).\
-However, cAdvisor does not export the state of the container.
-
-This exporter will only export the container status and the restarts count.
-
-## Installation and Usage
-
-The `docker_state_exporter` listens on HTTP port 8080 by default.
-
-### Docker
-
-For Docker run.
+## Run it
 
 ```bash
-sudo docker run -d \
-  -v "/var/run/docker.sock:/var/run/docker.sock" \
+docker run -d --name docker-state-exporter \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  --group-add "$(stat -c '%g' /var/run/docker.sock)" \
   -p 8080:8080 \
-  karugaru/docker_state_exporter \
-  -listen-address=:8080
+  ghcr.io/dblencowe/docker-state-exporter:latest
 ```
 
-For Docker compose.
+The `--group-add` matters: the image is distroless `nonroot` (UID 65532), so it needs the host's docker GID to read the socket. Skip it and the first scrape will tell you `permission denied`.
+
+Compose:
 
 ```yaml
----
-version: '3.8'
-
 services:
-  docker_state_exporter:
-    image: karugaru/docker_state_exporter
+  docker-state-exporter:
+    image: ghcr.io/dblencowe/docker-state-exporter:latest
+    restart: unless-stopped
     volumes:
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/docker.sock
-    ports:
-      - "8080:8080"
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    group_add:
+      - "999"   # host's docker GID; check with: getent group docker
+    ports: ["8080:8080"]
 ```
+
+Images are multi-arch (`linux/amd64`, `linux/arm64`, `linux/arm/v7`) and signed with cosign keyless.
+
+## Endpoints
+
+- `GET /metrics` - Prometheus scrape (path overridable via `-metrics-path`)
+- `GET /-/healthy` - liveness; returns `up` if the process is breathing
+- `GET /-/ready` - readiness; pings the daemon, returns `503` if it can't reach it
 
 ## Metrics
 
-This exporter will export the following metrics.
+All emitted as gauges, all labelled with `id`, `name`, `image`, `container_hostname`, the optional `host`, and one `container_label_*` per container label.
 
-- container_state_health_status
-- container_state_status
-- container_state_oomkilled
-- container_state_startedat
-- container_state_finishedat
-- container_restartcount
+| Name | Description |
+|------|-------------|
+| `container_state_health_status{status="..."}` | `1` for the active health state, `0` for the others (`none`, `starting`, `healthy`, `unhealthy`) |
+| `container_state_status{status="..."}` | `1` for the active container state, `0` for the others (`paused`, `restarting`, `running`, `removing`, `dead`, `created`, `exited`) |
+| `container_state_oomkilled` | `1` if killed by the OOM killer |
+| `container_state_startedat` | Unix seconds - last start time |
+| `container_state_finishedat` | Unix seconds - last stop time |
+| `container_state_created` | Unix seconds - creation time |
+| `container_restartcount` | Restart count |
 
-These metrics will be the same as the results of docker inspect.
+`container_label_*` keys are lower-cased and non-alphanumerics get replaced with `_`. There's a built-in deny-list for Compose's `config-hash` and `oneoff` labels - both rotate on every rebuild and would otherwise nuke your TSDB.
 
-This exporter also exports the standard
-[Go Collector](https://pkg.go.dev/github.com/prometheus/client_golang/prometheus#NewGoCollector)
-and [Process Collector](https://pkg.go.dev/github.com/prometheus/client_golang/prometheus#NewProcessCollector).
+The `host` label is empty by default (omitted entirely) so adding it later doesn't break series identity. Set `-host-label` once you start scraping multiple Docker hosts into one Prometheus.
 
-## Caution
+## Flags
 
-This exporter will do a docker inspect every time prometheus pulls.\
-If a large number of requests are made, there will be performance issues. (I think. Not verified.)\
-So, this app caches the result of docker inspect for 1 second.
-So, please note that if you set the scrape_interval of prometheus to less than one second, you may get the same result back.
+| Flag | Default | |
+|------|---------|---|
+| `-listen-address` | `:8080` | |
+| `-metrics-path` | `/metrics` | |
+| `-cache-ttl` | `1s` | how long to reuse one `docker inspect` snapshot across scrapes |
+| `-host-label` | *(empty)* | sets the `host` label; empty omits it |
+| `-log-level` | `info` | `debug` / `info` / `warn` / `error` |
+| `-log-format` | `json` | `json` or `text` |
+| `-version` | | prints version + commit + build date |
 
-## Development building and running
+## Why one inspect call per cache TTL
 
-I am running this application on Docker (linux/amd64).
-I have not tested it in any other environment.
+Every Prometheus scrape would otherwise trigger one `ContainerList` plus one `ContainerInspect` *per container*. Default Prometheus scrapes every 15s; if you've got 50 containers and three Prometheus instances scraping you, the docker daemon eats the load. The 1s cache means each scrape sees fresh-enough data without that fanout. Bump it on dense hosts.
 
-### Build
+## Develop
+
+Go 1.25+ (required by the Docker SDK transitive deps). Source lives in `cmd/docker-state-exporter/`.
 
 ```bash
-git clone https://github.com/karugaru/docker_state_exporter
-cd docker_state_exporter
-sudo docker build -t docker_state_exporter_test .
+make build         # local binary
+make test          # unit tests
+make test-race     # tests + race detector (needs CGO)
+make lint          # golangci-lint
+make docker        # local single-arch image
+make docker-multi  # buildx multi-arch
 ```
 
-### Run
+Tests use a fake `DockerClient` (the four-method interface in `docker.go`) - no daemon needed.
+
+## Releases
+
+Tags are driven by [release-please](https://github.com/googleapis/release-please) reading [Conventional Commits](https://www.conventionalcommits.org/) on `main`. A merged `feat:` or `fix:` opens a release PR with a generated changelog and a version bump; merging the PR cuts the tag. Tag pushes trigger [`docker.yml`](.github/workflows/docker.yml), which builds the multi-arch image, pushes to GHCR, and signs with cosign.
+
+Verify a published image:
 
 ```bash
-sudo docker run -d \
-  -v "/var/run/docker.sock:/var/run/docker.sock" \
-  -p 8080:8080 \
-  docker_state_exporter_test \
-  -listen-address=:8080
+cosign verify ghcr.io/dblencowe/docker-state-exporter:vX.Y.Z \
+  --certificate-identity-regexp '^https://github.com/dblencowe/docker-state-exporter/' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
+
+## License
+
+MIT - see [LICENSE](LICENSE).

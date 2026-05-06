@@ -13,3 +13,12 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# Local binary builds
+/docker-state-exporter
+/dist/
+
+# IDE
+/.idea/
+/.vscode/
+
